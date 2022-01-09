@@ -4,11 +4,13 @@ library(dplyr)
 library(paran)
 library(HDclassif)  
 library(stargazer)
+library(randomForest)
 
 load("Caravan.Rdata")
 
 head(Caravan)
- 
+
+# Define a function that will compute the desired performance measures
 metrics <- function(observed,predicted)
 {tab<-table(observed,predicted)
 hit_rate<-sum(diag(tab))/sum(tab)
@@ -29,8 +31,8 @@ Caravan[,1:83] <- scale(Caravan[,1:83], center = T, scale = F)
 lda_model_train <- lda(Caravan[,1:83], Caravan[,84], prior=c(.940,.060)) 
 pred_train_lda <- predict(lda_model_train,Caravan[,1:83])
 pred_train_lda_ecm <- ifelse(1*pred_train_lda$posterior[,1]>=20*pred_train_lda$posterior[,2],"No","Yes")
- 
- 
+
+
 # Metrics - Training data
 metrics_train_lda <- metrics(Caravan[,84], pred_train_lda$class)
 metrics_train_lda_ecm <- metrics(Caravan[,84], pred_train_lda_ecm)
@@ -202,4 +204,203 @@ round(metrics_table, 4)
 stargazer(metrics_table,  # type = "text", 
           summary = FALSE  )
 
- 
+################################################################################
+#                               Tree-based models                              #
+################################################################################
+
+# Code Jonas
+
+load("Caravan.Rdata")
+
+set.seed(999)
+
+
+# The dataset is randomly split into two equal parts. One for training, one for testing
+# A special dataframe is made for the dependent variable, which is 'Purchase'
+train = sample(nrow(Caravan), (nrow(Caravan) / 2))
+data.train <- Caravan[train, 1:83]
+data.test <- Caravan[-train, 1:83]
+dependent.train <- Caravan[train, 84]
+dependent.test <- Caravan[-train, 84] 
+
+cdata.train <- scale(data.train, center = TRUE, scale = FALSE)
+cdata.test <- scale(data.test, center = TRUE, scale = FALSE)
+ndata.train <- data.frame(data.train, Purchase = dependent.train)
+ndata.test <- data.frame(data.test, Purchase = dependent.test) 
+
+
+# The performance of each classifier is measured with the sensitivity, specificity, and hit rate
+# The error is the OOB error for training data and test error for test data
+performance <- function(tab){
+        sensitivity <- tab[2, 2] / (tab[2, 1] + tab[2, 2])
+        specificity <- tab[1, 1] / (tab[1, 1] + tab[1, 2])
+        hit_rate    <- (tab[1, 1] + tab[2, 2]) / (tab[1, 1] + tab[1, 2] + tab[2, 1] + tab[2, 2])
+        Error <- (tab[1, 2] + tab[2, 1]) / (tab[1, 1] + tab[1, 2] + tab[2, 1 ] + tab[2, 2])
+        performance <- c(sensitivity = sensitivity, specificity = specificity, hit_rate = hit_rate, Error = Error)
+} 
+
+
+# Bagging
+# mtry = 83, as there are 83 independent variables in the dataset
+# So he can use all the independent variables
+# 5000 trees are fitted
+ctrain <- cbind(cdata.train, dependent.train)
+bag.mod = randomForest(as.factor(dependent.train)~., data = ctrain, mtry = 83, ntree = 5000, importance = TRUE)
+bag.mod 
+
+
+# Predictions training data
+pred.train <- predict(bag.mod, newdata = ctrain, type = "prob")
+
+# Equal distribution
+class.train <- ifelse(pred.train > 0.5, 1, 0)
+tab <- table(dependent.train, class.train[, 2])
+bag.train.equal <- performance(tab) 
+
+# Unequal distribution 
+class.train <- ifelse(1 * pred.train[, 1] >= 20 * pred.train[, 2], "No", "Yes")
+tab <- table(dependent.train, class.train)
+bag.train.unequal <- performance(tab) 
+
+
+# Predictions test data
+pred.test <- predict(bag.mod, newdata = cdata.test, type="prob")
+
+# Equal distribution
+class.test <- ifelse(pred.test > 0.5, 1 ,0)
+tab <- table(dependent.test, class.test[, 2])
+bag.test.equal <- performance(tab)
+
+# Unequal distribution
+class.test <- ifelse( 1* pred.test[, 1] >= 20 * pred.test[, 2], "No", "Yes")
+tab <- table(dependent.test, class.test)
+bag.test.unequal <- performance(tab) 
+
+
+# Random forest
+# 8 predictors are randomly selected out of 83
+# 5000 trees are fitted
+ctrain <- cbind(cdata.train, dependent.train)
+rf.mod = randomForest(as.factor(dependent.train)~., data=ctrain, mtry = 8, ntree = 5000, importance = TRUE)
+rf.mod
+
+
+# Predictions training data
+pred.train <- predict(rf.mod, newdata = ctrain, type = "prob")
+
+# Equal distribution
+class.train <- ifelse(pred.train > 0.5, 1, 0)
+tab <- table(dependent.train, class.train[, 2])
+rf.train.equal <- performance(tab)
+
+# Unequal distribution
+class.train <- ifelse(1 * pred.train[, 1] >= 20 * pred.train[, 2], "No", "Yes")
+tab <- table(dependent.train, class.train)
+rf.train.unequal <- performance(tab)
+
+
+# Predictions test data
+pred.test <- predict(rf.mod, newdata = cdata.test, type = "prob")
+
+# Equal distribution
+class.test <- ifelse(pred.test > 0.5, 1, 0)
+tab <- table(dependent.test, class.test[, 2])
+rf.test.equal <- performance(tab)
+
+# Unequal distribution
+class.test <- ifelse( 1 * pred.test[, 1] >= 20 * pred.test[, 2], "No", "Yes")
+tab <- table(dependent.test, class.test)
+rf.test.unequal <- performance(tab) 
+
+
+# Making tables for the two different scenarios
+tabel_equal_distribution <- round(rbind(bag.train.equal, bag.test.equal, rf.train.equal, rf.test.equal), 3) 
+tabel_unequal_distribution <- round(rbind(bag.train.unequal, bag.test.unequal, rf.train.unequal, rf.test.unequal), 3) 
+
+
+# Code Ilias
+
+#
+# Bagging
+# 
+
+performance <- function(tab){
+        sensitivity <- tab[2, 2] / (tab[2, 1] + tab[2, 2])
+        specificity <- tab[1, 1] / (tab[1, 1] + tab[1, 2])
+        hit_rate    <- (tab[1, 1] + tab[2, 2]) / (tab[1, 1] + tab[1, 2] + tab[2, 1] + tab[2, 2])
+        Error <- (tab[1, 2] + tab[2, 1]) / (tab[1, 1] + tab[1, 2] + tab[2, 1 ] + tab[2, 2])
+        performance <- c(sensitivity = sensitivity, specificity = specificity, hit_rate = hit_rate, Error = Error)
+} 
+
+set.seed(42069)
+
+# compute model
+bag.mod <- randomForest(Purchase~., data=Caravan, mtry=83, ntree=5000,
+                        importance = TRUE)
+
+# Compute training and test error with equal misclass costs
+bag.pred.probs <- predict(bag.mod, newdata=Caravan, type="prob")
+bag.pred.eq <- ifelse(bag.pred.probs[,1] >= 0.5, "No", "Yes")
+bag.pred.uneq <- ifelse(bag.pred.probs[,1] >= bag.pred.probs[,2]*20, "No", "Yes")
+
+bag.pred.eq.measures <- performance(table(Caravan$Purchase, bag.pred.eq))
+bag.pred.uneq.measures <- performance(table(Caravan$Purchase, bag.pred.uneq))
+
+# estimate OOB performances
+bag.oob.eq <- ifelse(bag.mod$votes[,1] >= 0.5, "No", "Yes")
+bag.oob.eq <- performance(table(Caravan$Purchase, bag.oob.eq))
+bag.oob.uneq <- ifelse(bag.mod$votes[,1] >= bag.mod$votes[,2]*20, "No", "Yes")
+bag.oob.uneq <- performance(table(Caravan$Purchase, bag.oob.uneq))
+
+bag.perf <- rbind(bag.pred.eq.measures, bag.pred.uneq.measures, bag.oob.eq, bag.oob.uneq)
+
+#
+# Random Forests
+#
+rf.mod <- randomForest(as.factor(Purchase)~.,data=Caravan,mrty=5,ntree=5000,
+                       importance=TRUE)
+rf.mod
+
+rf.pred.probs <- predict(rf.mod, newdata=Caravan, type="prob")
+rf.pred.eq <- ifelse(rf.pred.probs[,1] >= 0.5, "No", "Yes")
+rf.pred.uneq <- ifelse(rf.pred.probs[,1] >= rf.pred.probs[,2]*20, "No", "Yes")
+
+rf.pred.eq.measures <- performance(table(Caravan$Purchase, rf.pred.eq))
+rf.pred.uneq.measures <- performance(table(Caravan$Purchase, rf.pred.uneq))
+
+# estimate OOB performances
+rf.oob.eq <- ifelse(rf.mod$votes[,1] >= 0.5, "No", "Yes")
+rf.oob.eq <- performance(table(Caravan$Purchase, rf.oob.eq))
+rf.oob.uneq <- ifelse(rf.mod$votes[,1] >= rf.mod$votes[,2]*20, "No", "Yes")
+rf.oob.uneq <- performance(table(Caravan$Purchase, rf.oob.uneq))
+
+rf.perf <- rbind(rf.pred.eq.measures, rf.pred.uneq.measures, rf.oob.eq, rf.oob.uneq) 
+
+tree.perf <- rbind(bag.perf, rf.perf)
+rownames(tree.perf) <- c("Bagging train", "Bagging train. ECM",
+                         "Bagging test", "Bagging test. ECM",
+                         "Rand. For. train", "Rand. For. train. ECM",
+                         "Rand. For. test", "Rand. For. test. ECM")
+
+stargazer(tree.perf,  # type = "text", 
+          summary = FALSE  )
+
+# Expected profits
+profit <- function(tab){
+       profit <- tab[1,2]*20 - tab[2,2]*1
+} 
+
+lda.profit <- profit(table(Caravan$Purchase, pred_test_lda_ecm))
+lda.pca.profit <- profit(table(Caravan$Purchase, pred_test_lda_pca_ecm))
+qda.pca.profit <- profit(table(Caravan$Purchase, pred_test_qda_pca_ecm))
+hdda.profit <- profit(table(Caravan$Purchase, pred_test_hdda_ecm))
+bag.profit <- profit(table(Caravan$Purchase, 
+                           ifelse(bag.mod$votes[,1] >= bag.mod$votes[,2]*20, "No", "Yes")))
+rf.profit <- profit(table(Caravan$Purchase, 
+                          ifelse(rf.mod$votes[,1] >= rf.mod$votes[,2]*20, "No", "Yes")))
+profits <- data.frame(lda.profit, lda.pca.profit, qda.pca.profit, hdda.profit,
+                      bag.profit, rf.profit)
+profits
+
+stargazer(profits,  # type = "text", 
+          summary = FALSE  )
